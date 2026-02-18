@@ -24,6 +24,27 @@ export default function SignInPage() {
                     path="/sign-in"
                     afterSignInUrl="/lobby"
                     signUpUrl="/sign-up"
+                    appearance={{
+                        baseTheme: undefined,
+                        variables: {
+                            colorPrimary: "#f97316",
+                            colorBackground: "#ffffff",
+                            colorText: "#1a1a1a",
+                            colorInputBackground: "#f9fafb",
+                            colorInputText: "#1a1a1a",
+                            borderRadius: "0.75rem",
+                        },
+                        elements: {
+                            card: "shadow-xl border border-gray-200",
+                            formButtonPrimary: "bg-orange-500 hover:bg-orange-600",
+                            socialButtonsBlockButton:
+                                "bg-white border border-gray-300 text-gray-700 hover:bg-gray-50",
+                            socialButtonsBlockButtonText: "text-gray-700 font-medium",
+                            formFieldInput:
+                                "bg-gray-50 border-gray-300 text-gray-900",
+                            footerActionLink: "text-orange-500 hover:text-orange-600",
+                        },
+                    }}
                 />
             </div>
         </div>

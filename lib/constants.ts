@@ -4,6 +4,9 @@ export const MAX_PLAYERS = 40;
 /** Number of players per team */
 export const TEAM_SIZE = 4;
 
+/** Total number of game rounds */
+export const TOTAL_ROUNDS = 4;
+
 /** Inactivity timeout in milliseconds (10 minutes) */
 export const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -14,8 +17,15 @@ export const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 export const ADMIN_USERNAME = 'admin';
 export const ADMIN_PASSWORD = 'root';
 
+/** AdminX credentials (image approval admin) */
+export const ADMINX_USERNAME = 'adminx';
+export const ADMINX_PASSWORD = 'rootx';
+
 /** Admin session cookie name */
 export const ADMIN_COOKIE = 'survivor_admin_session';
+
+/** AdminX session cookie name */
+export const ADMINX_COOKIE = 'survivor_adminx_session';
 
 /** Test user cookie name */
 export const TEST_USER_COOKIE = 'survivor_test_user';

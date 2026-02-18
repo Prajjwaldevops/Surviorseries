@@ -4,10 +4,10 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useUser, useClerk } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Users, Wifi, WifiOff, Clock, Gamepad2, Shield, UserCheck, LogOut } from "lucide-react";
+import { Users, Wifi, WifiOff, Clock, Gamepad2, LogOut } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { HEARTBEAT_INTERVAL_MS, INACTIVITY_TIMEOUT_MS } from "@/lib/constants";
-import type { LobbyUser, GameState, Team } from "@/lib/types";
+import { HEARTBEAT_INTERVAL_MS } from "@/lib/constants";
+import type { LobbyUser, GameState } from "@/lib/types";
 import Navbar from "@/components/Navbar";
 import GameStatusBadge from "@/components/GameStatusBadge";
 
@@ -17,7 +17,6 @@ export default function LobbyPage() {
     const router = useRouter();
     const [lobbyUsers, setLobbyUsers] = useState<LobbyUser[]>([]);
     const [gameStatus, setGameStatus] = useState<GameState["status"]>("waiting");
-    const [teams, setTeams] = useState<Team[]>([]);
     const [joined, setJoined] = useState(false);
     const lastActivityRef = useRef(Date.now());
 
@@ -61,19 +60,16 @@ export default function LobbyPage() {
     const fetchGameState = useCallback(async () => {
         const { data } = await supabase
             .from("game_state")
-            .select("status")
-            .single();
-        if (data) setGameStatus(data.status);
-    }, []);
-
-    // Fetch teams
-    const fetchTeams = useCallback(async () => {
-        const { data } = await supabase
-            .from("teams")
             .select("*")
-            .order("rank", { ascending: true });
-        if (data) setTeams(data);
-    }, []);
+            .single();
+        if (data) {
+            setGameStatus(data.status);
+            // If game moved to team_formation, redirect to team page
+            if (data.status === "team_formation" || data.status === "image_upload" || data.status === "playing") {
+                router.push("/team");
+            }
+        }
+    }, [router]);
 
     // Initialize
     useEffect(() => {
@@ -81,9 +77,8 @@ export default function LobbyPage() {
             joinLobby();
             fetchLobby();
             fetchGameState();
-            fetchTeams();
         }
-    }, [isLoaded, user, isTestUser, joinLobby, fetchLobby, fetchGameState, fetchTeams]);
+    }, [isLoaded, user, isTestUser, joinLobby, fetchLobby, fetchGameState]);
 
     // Realtime subscriptions
     useEffect(() => {
@@ -102,32 +97,23 @@ export default function LobbyPage() {
                 "postgres_changes",
                 { event: "*", schema: "public", table: "game_state" },
                 (payload) => {
-                    const newStatus = (payload.new as GameState).status;
-                    setGameStatus(newStatus);
-                    if (newStatus === "live") {
-                        fetchTeams();
+                    const newState = payload.new as GameState;
+                    setGameStatus(newState.status);
+                    // Redirect when game moves past waiting
+                    if (newState.status !== "waiting") {
+                        router.push("/team");
                     }
                 }
-            )
-            .subscribe();
-
-        const teamsSub = supabase
-            .channel("teams-lobby")
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "teams" },
-                () => fetchTeams()
             )
             .subscribe();
 
         return () => {
             supabase.removeChannel(lobbySub);
             supabase.removeChannel(gameSub);
-            supabase.removeChannel(teamsSub);
         };
-    }, [fetchLobby, fetchTeams, router, isTestUser]);
+    }, [fetchLobby, router]);
 
-    // Heartbeat + inactivity timeout
+    // Heartbeat (no inactivity timeout as requested)
     useEffect(() => {
         if (!currentUserId) return;
 
@@ -139,17 +125,6 @@ export default function LobbyPage() {
         window.addEventListener("click", onActivity);
 
         const heartbeat = setInterval(async () => {
-            if (Date.now() - lastActivityRef.current > INACTIVITY_TIMEOUT_MS) {
-                clearInterval(heartbeat);
-                if (!isTestUser) {
-                    await signOut();
-                } else {
-                    document.cookie = "survivor_test_user=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
-                    router.push("/");
-                }
-                return;
-            }
-
             await fetch("/api/lobby/heartbeat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -163,7 +138,7 @@ export default function LobbyPage() {
             window.removeEventListener("keydown", onActivity);
             window.removeEventListener("click", onActivity);
         };
-    }, [currentUserId, signOut, isTestUser, router]);
+    }, [currentUserId]);
 
     if (!isLoaded && !isTestUser) {
         return (
@@ -172,11 +147,6 @@ export default function LobbyPage() {
             </div>
         );
     }
-
-    // Find the current user's team
-    const myTeam = teams.find((t) =>
-        t.members.some((m) => m.userId === currentUserId)
-    );
 
     // Logout handler
     const handleLogout = async () => {
@@ -210,9 +180,7 @@ export default function LobbyPage() {
                         Game Lobby
                     </h1>
                     <p className="text-gray-400">
-                        {gameStatus === "live"
-                            ? "Teams are formed! Upload your team photo to get approved."
-                            : "Wait here until the admin approves the game."}
+                        Wait here until the admin starts the game. All players will be assigned to teams.
                     </p>
                     <div className="flex items-center justify-center gap-3 mt-3">
                         {isTestUser && (
@@ -230,123 +198,6 @@ export default function LobbyPage() {
                     </div>
                 </div>
 
-                {/* Team Assignments - shown when game is live and teams exist */}
-                {gameStatus === "live" && teams.length > 0 && (
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mb-8"
-                    >
-                        {/* My team highlight */}
-                        {myTeam && (
-                            <div className="glass-card-elevated p-6 mb-4 border-orange-500/20">
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 flex items-center justify-center">
-                                            <Shield className="w-5 h-5 text-white" />
-                                        </div>
-                                        <div>
-                                            <h2 className="text-lg font-bold text-white">{myTeam.name}</h2>
-                                            <p className="text-gray-500 text-sm">{myTeam.team_id} • Your team</p>
-                                        </div>
-                                    </div>
-                                    {myTeam.approved ? (
-                                        <span className="text-xs bg-green-500/10 border border-green-500/20 text-green-400 px-3 py-1 rounded-full">
-                                            ✅ Approved
-                                        </span>
-                                    ) : (
-                                        <span className="text-xs bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 px-3 py-1 rounded-full animate-pulse">
-                                            ⏳ Waiting to Confirm
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
-                                    {myTeam.members.map((m, idx) => (
-                                        <div
-                                            key={idx}
-                                            className={`flex items-center gap-3 p-3 rounded-xl border ${m.userId === currentUserId
-                                                ? "bg-orange-500/10 border-orange-500/20"
-                                                : "bg-white/[0.02] border-white/5"
-                                                }`}
-                                        >
-                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-500/20 to-orange-600/20 flex items-center justify-center text-orange-400 font-bold text-sm">
-                                                {m.name.charAt(0).toUpperCase()}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-white text-sm font-medium truncate">
-                                                    {m.name}
-                                                    {m.userId === currentUserId && (
-                                                        <span className="text-orange-400 text-xs ml-1">(You)</span>
-                                                    )}
-                                                </p>
-                                                <p className="text-gray-500 text-xs truncate">{m.email}</p>
-                                            </div>
-                                            <UserCheck className="w-4 h-4 text-yellow-400" />
-                                        </div>
-                                    ))}
-                                </div>
-                                {!myTeam.approved && (
-                                    <a
-                                        href="/team-approval"
-                                        className="btn-primary w-full flex items-center justify-center gap-2"
-                                    >
-                                        📸 Upload Team Photo to Confirm
-                                    </a>
-                                )}
-                            </div>
-                        )}
-
-                        {/* All teams overview */}
-                        <div className="glass-card p-6">
-                            <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                <Users className="w-5 h-5 text-orange-500" />
-                                All Teams ({teams.length})
-                            </h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {teams.map((team) => (
-                                    <div
-                                        key={team.team_id}
-                                        className={`rounded-xl p-4 border ${team.team_id === myTeam?.team_id
-                                            ? "bg-orange-500/5 border-orange-500/20"
-                                            : "bg-white/[0.02] border-white/5"
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between mb-2">
-                                            <h3 className="text-white font-bold text-sm">{team.name}</h3>
-                                            {team.approved ? (
-                                                <span className="text-[10px] text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full">
-                                                    Confirmed
-                                                </span>
-                                            ) : (
-                                                <span className="text-[10px] text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
-                                                    Waiting to Confirm
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="space-y-1">
-                                            {team.members.map((m, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className="flex items-center gap-2 text-xs"
-                                                >
-                                                    <div className="w-5 h-5 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-400 text-[10px] font-bold">
-                                                        {m.name.charAt(0).toUpperCase()}
-                                                    </div>
-                                                    <span className={`truncate ${m.userId === currentUserId ? "text-orange-400 font-medium" : "text-gray-300"
-                                                        }`}>
-                                                        {m.name}
-                                                        {m.userId === currentUserId && " (You)"}
-                                                    </span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
-
                 {/* Stats */}
                 <div className="grid grid-cols-2 gap-4 mb-8">
                     <div className="glass-card p-4 text-center">
@@ -360,10 +211,12 @@ export default function LobbyPage() {
                     <div className="glass-card p-4 text-center">
                         <div className="flex items-center justify-center gap-2 text-orange-400 mb-1">
                             <Clock className="w-4 h-4" />
-                            <span className="text-sm font-medium">Timeout</span>
+                            <span className="text-sm font-medium">Status</span>
                         </div>
-                        <p className="text-3xl font-bold text-white">10</p>
-                        <p className="text-gray-500 text-xs">min inactivity</p>
+                        <p className="text-xl font-bold text-white">
+                            {gameStatus === "waiting" ? "⏳ Waiting" : "🎮 Started"}
+                        </p>
+                        <p className="text-gray-500 text-xs">for admin to start</p>
                     </div>
                 </div>
 
@@ -382,7 +235,7 @@ export default function LobbyPage() {
                         )}
                     </div>
 
-                    <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto">
                         <AnimatePresence>
                             {lobbyUsers.map((u, idx) => (
                                 <motion.div
@@ -408,7 +261,10 @@ export default function LobbyPage() {
                                         </p>
                                         <p className="text-gray-500 text-xs truncate">{u.email}</p>
                                     </div>
-                                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-gray-600 text-xs">#{idx + 1}</span>
+                                        <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                                    </div>
                                 </motion.div>
                             ))}
                         </AnimatePresence>

@@ -5,18 +5,32 @@ import { NextResponse } from "next/server";
 const isProtectedRoute = createRouteMatcher([
     "/dashboard(.*)",
     "/lobby(.*)",
-    "/standings(.*)",
-    "/team-approval(.*)",
+    "/team(.*)",
+    "/team-photo(.*)",
+    "/game(.*)",
 ]);
 
 // Admin route that requires admin cookie
 const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
 const isAdminLoginRoute = createRouteMatcher(["/admin-login(.*)"]);
+
+// AdminX route that requires adminx cookie
+const isAdminXRoute = createRouteMatcher(["/adminx"]);
+const isAdminXLoginRoute = createRouteMatcher(["/adminx-login(.*)"]);
+
 const isTestLoginRoute = createRouteMatcher(["/test-login(.*)"]);
 
+// Public routes — no auth required
+const isPublicStandings = createRouteMatcher(["/standings(.*)"]);
+
 export default clerkMiddleware(async (auth, req) => {
-    // Skip admin-login and test-login pages (public)
-    if (isAdminLoginRoute(req) || isTestLoginRoute(req)) {
+    // Skip admin-login, adminx-login, test-login pages (public)
+    if (isAdminLoginRoute(req) || isAdminXLoginRoute(req) || isTestLoginRoute(req)) {
+        return NextResponse.next();
+    }
+
+    // Standings are public — no auth required
+    if (isPublicStandings(req)) {
         return NextResponse.next();
     }
 
@@ -25,6 +39,15 @@ export default clerkMiddleware(async (auth, req) => {
         const adminCookie = req.cookies.get("survivor_admin_session");
         if (!adminCookie || adminCookie.value !== "authenticated") {
             return NextResponse.redirect(new URL("/admin-login", req.url));
+        }
+        return NextResponse.next();
+    }
+
+    // AdminX routes → check adminx cookie
+    if (isAdminXRoute(req)) {
+        const adminxCookie = req.cookies.get("survivor_adminx_session");
+        if (!adminxCookie || adminxCookie.value !== "authenticated") {
+            return NextResponse.redirect(new URL("/adminx-login", req.url));
         }
         return NextResponse.next();
     }

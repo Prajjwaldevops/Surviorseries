@@ -8,6 +8,9 @@ import {
   Zap,
   BarChart3,
   ChevronRight,
+  Eye,
+  Camera,
+  Shuffle,
 } from "lucide-react";
 
 export default function HomePage() {
@@ -18,7 +21,6 @@ export default function HomePage() {
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-orange-500/5 rounded-full blur-[120px]" />
         <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-orange-600/3 rounded-full blur-[100px]" />
         <div className="absolute top-1/2 right-0 w-[400px] h-[400px] bg-orange-700/5 rounded-full blur-[80px]" />
-        {/* Grid overlay */}
         <div
           className="absolute inset-0 opacity-[0.02]"
           style={{
@@ -31,7 +33,6 @@ export default function HomePage() {
 
       {/* Hero Section */}
       <section className="relative z-10 min-h-screen flex flex-col items-center justify-center text-center px-4">
-        {/* Status badge */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -42,7 +43,6 @@ export default function HomePage() {
           Real-Time Competitive Scoring
         </motion.div>
 
-        {/* Main title */}
         <motion.h1
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -58,7 +58,6 @@ export default function HomePage() {
           </span>
         </motion.h1>
 
-        {/* Subtitle */}
         <motion.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -85,6 +84,13 @@ export default function HomePage() {
           >
             Get Started
             <ChevronRight className="w-5 h-5" />
+          </Link>
+          <Link
+            href="/standings"
+            className="flex items-center gap-2 text-lg px-8 py-4 rounded-xl bg-white/5 border border-white/10 text-white hover:bg-white/10 hover:border-white/20 transition-all font-medium"
+          >
+            <Eye className="w-5 h-5 text-orange-400" />
+            View Standings
           </Link>
         </motion.div>
 
@@ -121,7 +127,7 @@ export default function HomePage() {
               How It Works
             </h2>
             <p className="text-gray-400 max-w-xl mx-auto">
-              From lobby to leaderboard — everything happens in real-time.
+              4 rounds of intense competition — from lobby to champion.
             </p>
           </motion.div>
 
@@ -134,21 +140,21 @@ export default function HomePage() {
                 step: "01",
               },
               {
-                icon: Zap,
-                title: "Auto Teams",
-                desc: "Admin approves the game. Teams of 4 are formed automatically.",
+                icon: Shuffle,
+                title: "Team Formation",
+                desc: "Admin forms & shuffles teams. See your team in real-time.",
                 step: "02",
               },
               {
-                icon: BarChart3,
-                title: "Live Scoring",
-                desc: "Admin controls points. Watch the leaderboard update instantly.",
+                icon: Camera,
+                title: "Team Photo",
+                desc: "Upload a team selfie. AdminX approves before you play.",
                 step: "03",
               },
               {
                 icon: Trophy,
-                title: "Victory",
-                desc: "Game ends. Champions are declared with celebration.",
+                title: "4 Rounds",
+                desc: "Compete across 4 rounds with live scoring and elimination.",
                 step: "04",
               },
             ].map((feature, idx) => (
@@ -175,6 +181,35 @@ export default function HomePage() {
               </motion.div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* Public Standings Banner */}
+      <section className="relative z-10 py-12 px-4">
+        <div className="max-w-4xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="glass-card-elevated p-8 text-center"
+          >
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500/20 to-orange-700/20 flex items-center justify-center mx-auto mb-4">
+              <BarChart3 className="w-7 h-7 text-orange-400" />
+            </div>
+            <h3 className="text-2xl font-bold text-white mb-2" style={{ fontFamily: "var(--font-display)" }}>
+              Live Standings
+            </h3>
+            <p className="text-gray-400 mb-6 max-w-lg mx-auto">
+              Watch the action unfold without logging in. See standings, graphs, detailed points, team info, and round breakdowns — all in real-time.
+            </p>
+            <Link
+              href="/standings"
+              className="btn-primary inline-flex items-center gap-2 px-6 py-3"
+            >
+              <Eye className="w-5 h-5" />
+              View Live Standings
+            </Link>
+          </motion.div>
         </div>
       </section>
 

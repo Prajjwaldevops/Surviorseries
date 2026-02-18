@@ -7,7 +7,6 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Cloudflare R2 client (S3-compatible)
 const r2 = new S3Client({
     region: "auto",
     endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -19,8 +18,7 @@ const r2 = new S3Client({
 
 /**
  * POST /api/team/upload-image
- * Receives image file + teamId, uploads to Cloudflare R2, stores URL + team data in Supabase.
- * Body: FormData with "file" (image) and "teamId" (string)
+ * Uploads team image to R2 but does NOT auto-approve. AdminX must approve separately.
  */
 export async function POST(req: NextRequest) {
     try {
@@ -29,13 +27,9 @@ export async function POST(req: NextRequest) {
         const teamId = formData.get("teamId") as string | null;
 
         if (!teamId || !file) {
-            return NextResponse.json(
-                { error: "teamId and file are required" },
-                { status: 400 }
-            );
+            return NextResponse.json({ error: "teamId and file are required" }, { status: 400 });
         }
 
-        // Fetch the team to build image_data
         const { data: team, error: fetchError } = await supabase
             .from("teams")
             .select("*")
@@ -46,10 +40,14 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Team not found" }, { status: 404 });
         }
 
-        // Upload to Cloudflare R2
+        // Get current round
+        const { data: gameState } = await supabase.from("game_state").select("current_round").single();
+        const currentRound = gameState?.current_round || 1;
+
+        // Upload to R2
         const fileBuffer = Buffer.from(await file.arrayBuffer());
         const fileExt = file.name.split(".").pop() || "jpg";
-        const key = `teams/${teamId}/${Date.now()}.${fileExt}`;
+        const key = `teams/${teamId}/r${currentRound}-${Date.now()}.${fileExt}`;
 
         await r2.send(
             new PutObjectCommand({
@@ -60,10 +58,8 @@ export async function POST(req: NextRequest) {
             })
         );
 
-        // Build the public URL
         const imageUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
 
-        // Build image_data: R2 URL + team ID + members details + emails
         const imageData = {
             cloudflare_url: imageUrl,
             r2_key: key,
@@ -75,15 +71,21 @@ export async function POST(req: NextRequest) {
                 userId: m.userId,
             })),
             uploaded_at: new Date().toISOString(),
+            round: currentRound,
         };
 
-        // Update team: set image_url, image_data, and approve the team
+        // Update round_image_urls
+        const roundImageUrls = team.round_image_urls || {};
+        roundImageUrls[`r${currentRound}`] = imageUrl;
+
+        // Update team — NO auto-approval
         const { error: updateError } = await supabase
             .from("teams")
             .update({
                 image_url: imageUrl,
                 image_data: imageData,
-                approved: true,
+                image_approved: false,
+                round_image_urls: roundImageUrls,
             })
             .eq("team_id", teamId);
 
@@ -91,15 +93,12 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
             success: true,
-            approved: true,
             imageUrl,
             imageData,
+            message: "Image uploaded. Waiting for AdminX approval.",
         });
     } catch (err) {
         console.error("Team upload error:", err);
-        return NextResponse.json(
-            { error: "Failed to upload team image" },
-            { status: 500 }
-        );
+        return NextResponse.json({ error: "Failed to upload team image" }, { status: 500 });
     }
 }

@@ -9,9 +9,8 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-/** Generate a random unique team ID like "SRV-A3X7" */
 function generateTeamId(): string {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I to avoid confusion
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = "";
     const bytes = crypto.randomBytes(4);
     for (let i = 0; i < 4; i++) {
@@ -20,7 +19,6 @@ function generateTeamId(): string {
     return `SRV-${code}`;
 }
 
-/** Generate multiple unique team IDs */
 function generateUniqueTeamIds(count: number): string[] {
     const ids = new Set<string>();
     while (ids.size < count) {
@@ -31,24 +29,23 @@ function generateUniqueTeamIds(count: number): string[] {
 
 /**
  * POST /api/game/approve
- * Admin approves game → fetch lobby users, generate teams with unique IDs, set game to "live".
+ * Admin starts the game → forms teams from lobby, sets status to 'team_formation'.
+ * Max 10 teams. Teams of 4 first, remainder gets 3, 2, or 1.
  */
 export async function POST() {
     try {
-        // 1. Check current game state
         const { data: gameState } = await supabase
             .from("game_state")
             .select("*")
             .single();
 
-        if (gameState?.status === "live") {
+        if (gameState?.status !== "waiting") {
             return NextResponse.json(
-                { error: "Game is already live" },
+                { error: "Game can only be started from waiting state" },
                 { status: 400 }
             );
         }
 
-        // 2. Fetch all lobby users
         const { data: lobbyUsers, error: lobbyError } = await supabase
             .from("lobby")
             .select("*")
@@ -65,52 +62,58 @@ export async function POST() {
             );
         }
 
-        // 3. Shuffle players (Fisher-Yates)
+        // Shuffle players (Fisher-Yates)
         const shuffled = [...players];
         for (let i = shuffled.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
 
-        // 4. Calculate team count and generate unique IDs
-        const teamCount = Math.ceil(shuffled.length / TEAM_SIZE);
+        // Calculate teams: max 10 teams, fill teams of 4 first
+        const maxTeams = 10;
+        const teamCount = Math.min(maxTeams, Math.ceil(shuffled.length / TEAM_SIZE));
         const teamIds = generateUniqueTeamIds(teamCount);
 
-        // 5. Generate teams with unique IDs
-        const teams = [];
-        let teamIndex = 0;
+        // Distribute players round-robin for balanced teams
+        const teamMembers: typeof shuffled[0][][] = Array.from({ length: teamCount }, () => []);
+        for (let i = 0; i < shuffled.length; i++) {
+            teamMembers[i % teamCount].push(shuffled[i]);
+        }
 
-        for (let i = 0; i < shuffled.length; i += TEAM_SIZE) {
-            const members = shuffled.slice(i, i + TEAM_SIZE).map((p) => ({
+        const teams = teamMembers.map((members, idx) => ({
+            team_id: teamIds[idx],
+            name: `Team ${idx + 1}`,
+            members: members.map((p) => ({
                 name: p.name,
                 email: p.email,
                 userId: p.user_id,
                 eliminated: false,
-            }));
+            })),
+            points: 0,
+            round_points: { r1: 0, r2: 0, r3: 0, r4: 0 },
+            rank: idx + 1,
+            approved: false,
+            image_approved: false,
+            image_url: null,
+            image_data: null,
+            round_image_urls: {},
+        }));
 
-            teams.push({
-                team_id: teamIds[teamIndex],
-                name: `Team ${teamIndex + 1}`,
-                members,
-                points: 0,
-                rank: teamIndex + 1,
-                approved: false,
-                image_url: null,
-                image_data: null,
-            });
-
-            teamIndex++;
-        }
-
-        // 6. Clear existing teams and insert new ones
+        // Clear existing teams and insert new
         await supabase.from("teams").delete().neq("id", "00000000-0000-0000-0000-000000000000");
         const { error: insertError } = await supabase.from("teams").insert(teams);
         if (insertError) throw insertError;
 
-        // 7. Update game state to "live"
+        // Update game state to "team_formation"
         const { error: updateError } = await supabase
             .from("game_state")
-            .update({ status: "live", updated_at: new Date().toISOString() })
+            .update({
+                status: "team_formation",
+                current_round: 1,
+                round_status: "team_formation",
+                teams_locked: false,
+                updated_at: new Date().toISOString(),
+            })
             .eq("id", gameState!.id);
 
         if (updateError) throw updateError;
@@ -124,7 +127,7 @@ export async function POST() {
     } catch (err) {
         console.error("Game approve error:", err);
         return NextResponse.json(
-            { error: "Failed to approve game" },
+            { error: "Failed to start game" },
             { status: 500 }
         );
     }
