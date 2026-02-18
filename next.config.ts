@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Disable static optimization for pages that use auth
+  // All pages use client-side rendering with "use client" directive
+  reactStrictMode: true,
 };
 
 export default nextConfig;
