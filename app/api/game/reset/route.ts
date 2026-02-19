@@ -17,6 +17,9 @@ export async function POST() {
         const { data: teams } = await supabase.from("teams").select("*").order("rank", { ascending: true });
         const { data: scoreLogs } = await supabase.from("score_log").select("*").order("created_at", { ascending: true });
         const { data: timer } = await supabase.from("game_timer").select("*").single();
+        const { data: players } = await supabase.from("players").select("*");
+        const { data: playerScoreLogs } = await supabase.from("player_score_log").select("*").order("created_at", { ascending: true });
+        const { data: teamTimers } = await supabase.from("team_timers").select("*");
 
         const winner = teams?.find((t) => t.rank === 1);
 
@@ -28,6 +31,9 @@ export async function POST() {
                     teams,
                     score_logs: scoreLogs || [],
                     timer,
+                    players: players || [],
+                    player_score_logs: playerScoreLogs || [],
+                    team_timers: teamTimers || [],
                     archived_at: new Date().toISOString(),
                 },
                 winner_team_id: winner?.team_id || null,
@@ -36,9 +42,12 @@ export async function POST() {
         }
 
         // 3. Clear all tables
+        await supabase.from("player_score_log").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        await supabase.from("team_timers").delete().neq("id", "00000000-0000-0000-0000-000000000000");
         await supabase.from("score_log").delete().neq("id", "00000000-0000-0000-0000-000000000000");
         await supabase.from("teams").delete().neq("id", "00000000-0000-0000-0000-000000000000");
         await supabase.from("lobby").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        await supabase.from("players").delete().neq("id", "00000000-0000-0000-0000-000000000000");
 
         // 4. Reset game state
         await supabase.from("game_state").delete().neq("id", "00000000-0000-0000-0000-000000000000");

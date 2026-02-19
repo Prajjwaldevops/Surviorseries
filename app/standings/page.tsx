@@ -7,17 +7,24 @@ import { supabase } from "@/lib/supabase";
 import type { Team, GameState, GameTimer, ScoreLog } from "@/lib/types";
 import Leaderboard from "@/components/Leaderboard";
 import StandingsChart from "@/components/StandingsChart";
+import TimeChart from "@/components/TimeChart";
+import PlayerProfile from "@/components/PlayerProfile";
 
 export default function StandingsPage() {
     const [teams, setTeams] = useState<Team[]>([]);
+    const [players, setPlayers] = useState<any[]>([]);
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [timer, setTimer] = useState<GameTimer | null>(null);
     const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
     const [scoreLogs, setScoreLogs] = useState<ScoreLog[]>([]);
+    const [selectedPlayerUserId, setSelectedPlayerUserId] = useState<string | null>(null);
 
     const fetchData = useCallback(async () => {
         const { data: t } = await supabase.from("teams").select("*").order("rank", { ascending: true });
         if (t) setTeams(t);
+
+        const { data: p } = await supabase.from("players").select("*");
+        if (p) setPlayers(p);
 
         const { data: gs } = await supabase.from("game_state").select("*").single();
         if (gs) setGameState(gs);
@@ -83,6 +90,12 @@ export default function StandingsPage() {
 
     return (
         <div className="min-h-screen">
+            {selectedPlayerUserId && (
+                <PlayerProfile
+                    userId={selectedPlayerUserId}
+                    onClose={() => setSelectedPlayerUserId(null)}
+                />
+            )}
             {/* Header */}
             <div className="fixed top-0 left-0 right-0 z-50 glass-card border-b border-white/5">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -143,10 +156,15 @@ export default function StandingsPage() {
                         <p>No teams yet. The game hasn&apos;t started.</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                        <Leaderboard teams={teams} />
-                        <StandingsChart teams={teams} />
-                    </div>
+                    <>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                            <Leaderboard teams={teams} />
+                            <StandingsChart teams={teams} />
+                        </div>
+                        <div className="mb-8">
+                            <TimeChart teams={teams} />
+                        </div>
+                    </>
                 )}
 
                 {/* Team Detail View */}
@@ -161,8 +179,8 @@ export default function StandingsPage() {
                                     key={t.team_id}
                                     onClick={() => { setSelectedTeam(t.team_id); fetchTeamLogs(t.team_id); }}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${selectedTeam === t.team_id
-                                            ? "bg-orange-500/20 border border-orange-500/30 text-orange-400"
-                                            : "bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10"
+                                        ? "bg-orange-500/20 border border-orange-500/30 text-orange-400"
+                                        : "bg-white/5 border border-white/10 text-gray-400 hover:text-white hover:bg-white/10"
                                         }`}
                                 >
                                     #{t.rank} {t.name} ({t.points} pts)
@@ -186,14 +204,19 @@ export default function StandingsPage() {
                                         </div>
                                     </div>
 
-                                    {/* Round breakdown */}
+                                    {/* Round breakdown (points + times) */}
                                     <div className="grid grid-cols-4 gap-2">
                                         {[1, 2, 3, 4].map((r) => {
                                             const rk = `r${r}` as keyof typeof team.round_points;
+                                            const timeKey = `r${r}`;
+                                            const roundTime = team.round_times?.[timeKey] || 0;
                                             return (
                                                 <div key={r} className={`text-center p-2 rounded-lg border ${r === (gameState?.current_round || 0) ? "bg-orange-500/10 border-orange-500/20" : "bg-white/[0.02] border-white/5"}`}>
                                                     <p className="text-gray-500 text-xs">R{r}</p>
                                                     <p className="text-white font-bold">{team.round_points?.[rk] || 0}</p>
+                                                    {roundTime > 0 && (
+                                                        <p className="text-gray-500 text-[10px]">⏱ {formatTime(roundTime)}</p>
+                                                    )}
                                                 </div>
                                             );
                                         })}
@@ -201,14 +224,30 @@ export default function StandingsPage() {
 
                                     {/* Members */}
                                     <div className="grid grid-cols-2 gap-2">
-                                        {team.members.map((m) => (
-                                            <div key={m.userId} className={`flex items-center gap-2 p-2 rounded-lg border text-sm ${m.eliminated ? "bg-red-500/5 border-red-500/20" : "bg-white/[0.02] border-white/5"}`}>
-                                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${m.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400"}`}>
-                                                    {m.eliminated ? "💀" : m.name.charAt(0).toUpperCase()}
+                                        {team.members.map((m) => {
+                                            const pInfo = players.find(p => p.user_id === m.userId);
+                                            return (
+                                                <div key={m.userId} className={`flex items-center gap-2 p-2 rounded-lg border text-sm ${m.eliminated ? "bg-red-500/5 border-red-500/20" : "bg-white/[0.02] border-white/5 hover:bg-white/[0.04]"}`}>
+                                                    <button
+                                                        onClick={() => setSelectedPlayerUserId(m.userId)}
+                                                        className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${m.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400 hover:ring-2 hover:ring-orange-500/50"}`}
+                                                    >
+                                                        {m.eliminated ? "💀" : m.name.charAt(0).toUpperCase()}
+                                                    </button>
+                                                    <div className="flex-1 min-w-0">
+                                                        <button
+                                                            onClick={() => setSelectedPlayerUserId(m.userId)}
+                                                            className={`truncate text-left w-full hover:text-orange-400 transition-colors ${m.eliminated ? "text-red-300 line-through" : "text-white"}`}
+                                                        >
+                                                            {m.name}
+                                                        </button>
+                                                        {pInfo && (
+                                                            <div className="text-[10px] text-gray-400">{pInfo.points} pts</div>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <span className={`truncate ${m.eliminated ? "text-red-300 line-through" : "text-white"}`}>{m.name}</span>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
 
                                     {/* Team Image */}

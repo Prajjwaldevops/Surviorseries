@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Upload, Camera, Clock, Users, ImageIcon, X, CheckCircle2, ArrowRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import type { Team } from "@/lib/types";
+import type { Team, GameState } from "@/lib/types";
 import Navbar from "@/components/Navbar";
 
 export default function TeamPhotoPage() {
@@ -17,6 +17,7 @@ export default function TeamPhotoPage() {
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [message, setMessage] = useState("");
+    const [gameState, setGameState] = useState<GameState | null>(null);
     const [cameraActive, setCameraActive] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -40,29 +41,38 @@ export default function TeamPhotoPage() {
                 t.members.some((m) => m.userId === currentUserId)
             );
             setMyTeam(mine || null);
-
-            // If image is approved, redirect to game
-            if (mine?.image_approved) {
-                router.push("/game");
-            }
         }
-    }, [currentUserId, router]);
+    }, [currentUserId]);
+
+    const fetchGameState = useCallback(async () => {
+        const { data } = await supabase.from("game_state").select("*").single();
+        if (data) setGameState(data);
+    }, []);
 
     useEffect(() => {
         if (isLoaded || isTestUser) {
             fetchMyTeam();
+            fetchGameState();
         }
-    }, [isLoaded, isTestUser, fetchMyTeam]);
+    }, [isLoaded, isTestUser, fetchMyTeam, fetchGameState]);
 
     // Realtime — watch for image approval
     useEffect(() => {
         const sub = supabase
             .channel("team-photo-realtime")
             .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => fetchMyTeam())
+            .on("postgres_changes", { event: "*", schema: "public", table: "game_state" }, () => fetchGameState())
             .subscribe();
 
         return () => { supabase.removeChannel(sub); };
-    }, [fetchMyTeam]);
+    }, [fetchMyTeam, fetchGameState]);
+
+    // Redirect to game when game is actually playing and photo is approved
+    useEffect(() => {
+        if (myTeam?.image_approved && gameState?.status === "playing") {
+            router.push("/game");
+        }
+    }, [myTeam, gameState, router]);
 
     useEffect(() => {
         return () => { stopCameraStream(); };
@@ -161,12 +171,14 @@ export default function TeamPhotoPage() {
         );
     }
 
-    // Team has image already and it's approved → can proceed directly
+    // Team has image already and it's approved
     const imageApproved = myTeam?.image_approved;
     // Team already has image but not yet approved → waiting state
     const waitingForApproval = myTeam?.image_url && !myTeam?.image_approved;
-    // Team hasn't changed (has image from previous round, team_id same) → skip upload, auto-proceed
+    // Team image approved — show waiting for game start
     const hasExistingApprovedImage = myTeam?.image_url && myTeam?.image_approved;
+    // Is the game actually playing?
+    const gameIsPlaying = gameState?.status === "playing";
 
     return (
         <div className="min-h-screen">
@@ -189,33 +201,39 @@ export default function TeamPhotoPage() {
                             Go back to the <a href="/lobby" className="text-orange-400 hover:underline">lobby</a>.
                         </p>
                     </div>
-                ) : hasExistingApprovedImage ? (
-                    /* Team unchanged — image already approved, skip upload */
+                ) : hasExistingApprovedImage || imageApproved ? (
+                    /* Photo approved — waiting for game to start */
                     <div className="glass-card-elevated p-12 text-center">
-                        <CheckCircle2 className="w-16 h-16 text-green-400 mx-auto mb-4" />
-                        <h2 className="text-xl font-bold text-white mb-2">Photo Already Approved! ✅</h2>
-                        <p className="text-gray-400 mb-2">Your team hasn&apos;t changed — no new photo needed.</p>
-                        {myTeam.image_url && (
-                            <img
-                                src={myTeam.image_url}
-                                alt="Team photo"
-                                className="max-h-48 mx-auto rounded-xl border border-white/10 mb-4"
-                                crossOrigin="anonymous"
-                                referrerPolicy="no-referrer"
-                            />
+                        {gameIsPlaying ? (
+                            <>
+                                <CheckCircle2 className="w-16 h-16 text-green-400 mx-auto mb-4" />
+                                <h2 className="text-xl font-bold text-white mb-2">Photo Approved! ✅</h2>
+                                <p className="text-gray-400 mb-4">Game is live — jump into the arena!</p>
+                                <button onClick={() => router.push("/game")} className="btn-primary inline-flex items-center gap-2">
+                                    Enter Game Arena <ArrowRight className="w-4 h-4" />
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <div className="w-16 h-16 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center mx-auto mb-4">
+                                    <Clock className="w-8 h-8 text-yellow-400 animate-pulse" />
+                                </div>
+                                <h2 className="text-xl font-bold text-white mb-2">Waiting for Game to Start</h2>
+                                <p className="text-gray-400 mb-4">
+                                    Your photo has been approved! The admin will start the game shortly.
+                                </p>
+                                {myTeam.image_url && (
+                                    <img
+                                        src={myTeam.image_url}
+                                        alt="Team photo"
+                                        className="max-h-48 mx-auto rounded-xl border border-white/10 mb-4"
+                                    />
+                                )}
+                                <p className="text-xs text-gray-500 animate-pulse">
+                                    This page will auto-redirect when the game starts...
+                                </p>
+                            </>
                         )}
-                        <button onClick={() => router.push("/game")} className="btn-primary inline-flex items-center gap-2">
-                            Enter Game Arena <ArrowRight className="w-4 h-4" />
-                        </button>
-                    </div>
-                ) : imageApproved ? (
-                    <div className="glass-card-elevated p-12 text-center">
-                        <CheckCircle2 className="w-16 h-16 text-green-400 mx-auto mb-4" />
-                        <h2 className="text-xl font-bold text-white mb-2">Photo Approved! ✅</h2>
-                        <p className="text-gray-400 mb-4">Your team photo has been approved.</p>
-                        <button onClick={() => router.push("/game")} className="btn-primary inline-flex items-center gap-2">
-                            Enter Game Arena <ArrowRight className="w-4 h-4" />
-                        </button>
                     </div>
                 ) : waitingForApproval ? (
                     <div className="space-y-6">
@@ -244,8 +262,6 @@ export default function TeamPhotoPage() {
                                     src={myTeam.image_url}
                                     alt="Team photo"
                                     className="max-h-48 mx-auto rounded-xl border border-white/10 mb-4"
-                                    crossOrigin="anonymous"
-                                    referrerPolicy="no-referrer"
                                 />
                             )}
                             <p className="text-xs text-gray-500 animate-pulse">

@@ -25,6 +25,38 @@ export async function POST() {
             await supabase.from("game_timer").update({ running: false, elapsed_seconds: elapsed }).eq("id", timer.id);
         }
 
+        // Stop all running team timers for the current round
+        const currentRound = gameState.current_round || 1;
+        const { data: runningTimers } = await supabase
+            .from("team_timers")
+            .select("*")
+            .eq("round", currentRound)
+            .is("stopped_at", null)
+            .not("started_at", "is", null);
+
+        if (runningTimers && runningTimers.length > 0) {
+            for (const tt of runningTimers) {
+                const elapsedSec = Math.floor((Date.now() - new Date(tt.started_at).getTime()) / 1000);
+                await supabase
+                    .from("team_timers")
+                    .update({ stopped_at: new Date().toISOString(), elapsed_seconds: elapsedSec })
+                    .eq("team_id", tt.team_id)
+                    .eq("round", currentRound);
+
+                // Update team round_times
+                const { data: teamData } = await supabase
+                    .from("teams")
+                    .select("round_times")
+                    .eq("team_id", tt.team_id)
+                    .single();
+                if (teamData) {
+                    const roundTimes: Record<string, number> = teamData.round_times || {};
+                    roundTimes[`r${currentRound}`] = elapsedSec;
+                    await supabase.from("teams").update({ round_times: roundTimes }).eq("team_id", tt.team_id);
+                }
+            }
+        }
+
         // Recompute final ranks
         const { data: teams } = await supabase
             .from("teams")

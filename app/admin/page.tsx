@@ -20,12 +20,15 @@ import {
     Trophy,
     Shuffle,
     ArrowRight,
+    User,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import type { Team, GameState, LobbyUser, ScoreLog, GameTimer } from "@/lib/types";
+import type { Team, GameState, LobbyUser, ScoreLog, GameTimer, Player } from "@/lib/types";
 import Leaderboard from "@/components/Leaderboard";
 import StandingsChart from "@/components/StandingsChart";
+import TimeChart from "@/components/TimeChart";
 import GameStatusBadge from "@/components/GameStatusBadge";
+import PlayerProfile from "@/components/PlayerProfile";
 
 export default function AdminPage() {
     const router = useRouter();
@@ -37,9 +40,20 @@ export default function AdminPage() {
     const [message, setMessage] = useState("");
 
     // Score input state
-    const [scoreInputs, setScoreInputs] = useState<Record<string, { delta: string; desc: string }>>({});
+    const [scoreInputs, setScoreInputs] = useState<Record<string, { delta: string }>>({});
     const [expandedTeam, setExpandedTeam] = useState<string | null>(null);
     const [scoreLogs, setScoreLogs] = useState<ScoreLog[]>([]);
+
+    // Player scoring state
+    const [playerScoreInputs, setPlayerScoreInputs] = useState<Record<string, { delta: string; desc: string }>>({});
+
+    // Player profile modal
+    const [selectedPlayerUserId, setSelectedPlayerUserId] = useState<string | null>(null);
+
+
+
+    // Players data
+    const [players, setPlayers] = useState<Player[]>([]);
 
     // Fetch functions
     const fetchTeams = useCallback(async () => {
@@ -69,28 +83,35 @@ export default function AdminPage() {
         if (data) setScoreLogs(data);
     }, []);
 
+    const fetchPlayers = useCallback(async () => {
+        const { data } = await supabase.from("players").select("*");
+        if (data) setPlayers(data);
+    }, []);
+
     useEffect(() => {
         fetchTeams();
         fetchLobby();
         fetchGameState();
         fetchTimer();
-    }, [fetchTeams, fetchLobby, fetchGameState, fetchTimer]);
+        fetchPlayers();
+    }, [fetchTeams, fetchLobby, fetchGameState, fetchTimer, fetchPlayers]);
 
     // Realtime
     useEffect(() => {
         const sub = supabase
-            .channel("admin-realtime-v2")
+            .channel("admin-realtime-v3")
             .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => fetchTeams())
             .on("postgres_changes", { event: "*", schema: "public", table: "lobby" }, () => fetchLobby())
             .on("postgres_changes", { event: "*", schema: "public", table: "game_state" }, () => fetchGameState())
             .on("postgres_changes", { event: "*", schema: "public", table: "game_timer" }, () => fetchTimer())
+            .on("postgres_changes", { event: "*", schema: "public", table: "players" }, () => fetchPlayers())
             .on("postgres_changes", { event: "*", schema: "public", table: "score_log" }, () => {
                 if (expandedTeam) fetchScoreLogs(expandedTeam);
             })
             .subscribe();
 
         return () => { supabase.removeChannel(sub); };
-    }, [fetchTeams, fetchLobby, fetchGameState, fetchTimer, fetchScoreLogs, expandedTeam]);
+    }, [fetchTeams, fetchLobby, fetchGameState, fetchTimer, fetchPlayers, fetchScoreLogs, expandedTeam]);
 
     // Timer display
     const [displayTime, setDisplayTime] = useState(0);
@@ -113,6 +134,31 @@ export default function AdminPage() {
         const m = Math.floor(s / 60);
         const sec = s % 60;
         return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+    };
+
+    // Timer controls
+    const startTimer = async () => {
+        if (!timer) return;
+        if (timer.elapsed_seconds > 0) {
+            alert("Round finished! Reset the timer to start a new round.");
+            return;
+        }
+        setLoading("timer");
+        await apiCall("/api/game/timer", { action: "start" });
+        setLoading("");
+    };
+
+    const stopTimer = async () => {
+        setLoading("timer");
+        await apiCall("/api/game/timer", { action: "stop" });
+        setLoading("");
+    };
+
+    const resetTimer = async () => {
+        if (!confirm("Reset timer for the next round?")) return;
+        setLoading("timer");
+        await apiCall("/api/game/timer", { action: "reset" });
+        setLoading("");
     };
 
     // Actions
@@ -159,14 +205,26 @@ export default function AdminPage() {
         setLoading("");
     };
 
-    const handleScoreChange = async (teamId: string, delta: number, description: string) => {
+    const handleScoreChange = async (teamId: string, delta: number) => {
         await apiCall("/api/game/score", {
+            teamId,
+            delta,
+            round: gameState?.current_round || 1,
+            description: delta > 0 ? "Points added" : "Points deducted",
+        });
+    };
+
+    const handlePlayerScoreChange = async (userId: string, teamId: string, delta: number, description: string) => {
+        await apiCall("/api/game/player-score", {
+            userId,
             teamId,
             delta,
             round: gameState?.current_round || 1,
             description: description || (delta > 0 ? "Points added" : "Points deducted"),
         });
     };
+
+
 
     const startRound = async () => {
         setLoading("round"); setMessage("");
@@ -201,14 +259,7 @@ export default function AdminPage() {
         setLoading("");
     };
 
-    const toggleTimer = async () => {
-        const action = timer?.running ? "stop" : "start";
-        await apiCall("/api/game/timer", { action });
-    };
 
-    const resetTimer = async () => {
-        await apiCall("/api/game/timer", { action: "reset" });
-    };
 
     const eliminatePlayer = async (teamId: string, userId: string) => {
         try {
@@ -222,9 +273,19 @@ export default function AdminPage() {
         try {
             const res = await apiCall("/api/game/reinstate", { teamId, userId });
             if (res.ok) setMessage("✅ Player reinstated!");
+        } catch { setMessage("❌ Network error"); }
+    };
+
+    const eliminateTeam = async (teamId: string, eliminated: boolean) => {
+        if (!confirm(`Are you sure you want to ${eliminated ? "eliminate" : "reinstate"} this team?`)) return;
+        try {
+            const res = await apiCall("/api/game/team-eliminate", { teamId, eliminated });
+            if (res.ok) setMessage(`✅ Team ${eliminated ? "eliminated" : "reinstated"}!`);
             else { const d = await res.json(); setMessage(`❌ ${d.error}`); }
         } catch { setMessage("❌ Network error"); }
     };
+
+
 
     const exportGame = async () => {
         setLoading("export"); setMessage("");
@@ -253,9 +314,21 @@ export default function AdminPage() {
     };
 
     const gameStatus = gameState?.status || "waiting";
+    const currentRound = gameState?.current_round || 1;
+
+    // Helper: find player info for a member
+    const getPlayerInfo = (userId: string) => players.find((p) => p.user_id === userId);
 
     return (
         <div className="min-h-screen">
+            {/* Player Profile Modal */}
+            {selectedPlayerUserId && (
+                <PlayerProfile
+                    userId={selectedPlayerUserId}
+                    onClose={() => setSelectedPlayerUserId(null)}
+                />
+            )}
+
             {/* Admin Header */}
             <div className="fixed top-0 left-0 right-0 z-50 glass-card border-b border-white/5">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -276,6 +349,11 @@ export default function AdminPage() {
                                     Round {gameState.current_round}
                                 </span>
                             )}
+                            {/* Main Timer Display */}
+                            <div className="flex items-center gap-1.5 text-xs bg-black/30 px-3 py-1 rounded-full border border-white/10">
+                                <Timer className={`w-3 h-3 ${timer?.running ? "text-green-400 animate-pulse" : "text-gray-500"}`} />
+                                <span className="text-white font-mono">{formatTime(displayTime)}</span>
+                            </div>
                             <button onClick={logout} className="flex items-center gap-2 text-gray-400 hover:text-red-400 transition-colors text-sm">
                                 <LogOut className="w-4 h-4" />
                                 <span className="hidden sm:block">Logout</span>
@@ -322,17 +400,24 @@ export default function AdminPage() {
                                 Lobby Players ({lobbyUsers.length}/40)
                             </h2>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                                {lobbyUsers.map((u) => (
-                                    <div key={u.user_id} className="flex items-center gap-2 p-2 rounded-lg bg-white/[0.02] border border-white/5 text-sm">
-                                        <div className="w-7 h-7 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-400 text-xs font-bold">
-                                            {u.name.charAt(0).toUpperCase()}
+                                {lobbyUsers.map((u) => {
+                                    const pInfo = getPlayerInfo(u.user_id);
+                                    return (
+                                        <div key={u.user_id} className="flex items-center gap-2 p-2 rounded-lg bg-white/[0.02] border border-white/5 text-sm">
+                                            <div className="w-7 h-7 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-400 text-xs font-bold">
+                                                {u.name.charAt(0).toUpperCase()}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-white truncate text-xs">{u.name}</p>
+                                                {pInfo && (
+                                                    <p className="text-gray-500 truncate text-[10px]">
+                                                        {pInfo.roll_no} • {pInfo.branch} • {pInfo.gender === "male" ? "♂" : "♀"}
+                                                    </p>
+                                                )}
+                                            </div>
                                         </div>
-                                        <div className="min-w-0">
-                                            <p className="text-white truncate text-xs">{u.name}</p>
-                                            <p className="text-gray-500 truncate text-[10px]">{u.email}</p>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                                 {lobbyUsers.length === 0 && (
                                     <p className="text-gray-500 col-span-full text-center py-4">No players in lobby yet.</p>
                                 )}
@@ -384,9 +469,16 @@ export default function AdminPage() {
                             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
                                 <div>
                                     <h2 className="text-xl font-bold text-white" style={{ fontFamily: "var(--font-display)" }}>
-                                        🎮 Round {gameState?.current_round || 1} — Playing
+                                        🎮 Round {currentRound} — Playing
                                     </h2>
-                                    <p className="text-gray-400 text-sm">Teams: {teams.length} • Click team for point details</p>
+                                    <p className="text-gray-400 text-sm">Teams: {teams.length} • Click player name for profile</p>
+
+                                    {/* Round Overview Stats */}
+                                    <div className="flex gap-4 mt-2 text-xs font-mono text-gray-500">
+                                        <span>Total: {teams.length}</span>
+                                        <span className="text-red-400">Eliminated: {teams.filter(t => t.eliminated).length}</span>
+                                        <span className="text-green-400">Active: {teams.filter(t => !t.eliminated).length}</span>
+                                    </div>
                                 </div>
                                 {/* Timer */}
                                 <div className="flex items-center gap-3">
@@ -394,7 +486,10 @@ export default function AdminPage() {
                                         <Timer className="w-4 h-4 text-orange-400" />
                                         <span className="text-white font-mono text-xl">{formatTime(displayTime)}</span>
                                     </div>
-                                    <button onClick={toggleTimer} className={`px-3 py-2 rounded-lg text-sm font-medium ${timer?.running ? "bg-red-500/10 text-red-400 border border-red-500/20" : "bg-green-500/10 text-green-400 border border-green-500/20"}`}>
+                                    <button
+                                        onClick={timer?.running ? stopTimer : startTimer}
+                                        className={`px-3 py-2 rounded-lg text-sm font-medium ${timer?.running ? "bg-red-500/10 text-red-400 border border-red-500/20" : "bg-green-500/10 text-green-400 border border-green-500/20"}`}
+                                    >
                                         {timer?.running ? "Stop" : "Start"}
                                     </button>
                                     <button onClick={resetTimer} className="px-3 py-2 rounded-lg text-sm bg-white/5 text-gray-400 border border-white/10 hover:text-white">
@@ -406,7 +501,7 @@ export default function AdminPage() {
                             <div className="flex flex-wrap gap-3">
                                 <button onClick={endRound} disabled={loading === "round"} className="btn-danger flex items-center gap-2 disabled:opacity-40">
                                     <Square className="w-4 h-4" />
-                                    End Round {gameState?.current_round}
+                                    End Round {currentRound}
                                 </button>
                                 <button onClick={finishGame} disabled={loading === "finish"} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 hover:bg-yellow-500/20">
                                     <Trophy className="w-4 h-4" />
@@ -422,71 +517,182 @@ export default function AdminPage() {
                             </div>
                         </div>
 
-                        {/* Score Controls + Details */}
+                        {/* Per-Team Scoring & Player Controls */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                            {/* Per-team scoring */}
+                            {/* Per-team scoring + per-player scoring */}
                             <div className="glass-card-elevated p-6">
                                 <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    🎯 Score Control
+                                    🎯 Score & Player Control
                                 </h3>
-                                <div className="space-y-3">
+                                <div className="space-y-4">
                                     {teams.map((team) => (
-                                        <div key={team.team_id} className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <button onClick={() => { setExpandedTeam(expandedTeam === team.team_id ? null : team.team_id); if (expandedTeam !== team.team_id) fetchScoreLogs(team.team_id); }} className="text-left">
-                                                    <p className="text-white font-bold text-sm">{team.name}</p>
-                                                    <p className="text-gray-500 text-xs">{team.team_id} • {team.points} pts</p>
-                                                </button>
-                                                <span className="text-orange-400 font-bold text-lg">{team.points}</span>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <input
-                                                    type="number"
-                                                    placeholder="±pts"
-                                                    value={scoreInputs[team.team_id]?.delta || ""}
-                                                    onChange={(e) => setScoreInputs({ ...scoreInputs, [team.team_id]: { ...scoreInputs[team.team_id], delta: e.target.value } })}
-                                                    className="w-20 px-2 py-1.5 rounded-lg bg-black/30 border border-white/10 text-white text-sm text-center"
-                                                />
-                                                <input
-                                                    type="text"
-                                                    placeholder="Description..."
-                                                    value={scoreInputs[team.team_id]?.desc || ""}
-                                                    onChange={(e) => setScoreInputs({ ...scoreInputs, [team.team_id]: { ...scoreInputs[team.team_id], desc: e.target.value } })}
-                                                    className="flex-1 px-2 py-1.5 rounded-lg bg-black/30 border border-white/10 text-white text-sm"
-                                                />
-                                                <button
-                                                    onClick={() => {
-                                                        const d = parseInt(scoreInputs[team.team_id]?.delta || "0");
-                                                        if (d !== 0) {
-                                                            handleScoreChange(team.team_id, d, scoreInputs[team.team_id]?.desc || "");
-                                                            setScoreInputs({ ...scoreInputs, [team.team_id]: { delta: "", desc: "" } });
-                                                        }
-                                                    }}
-                                                    className="px-3 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 text-sm font-bold"
-                                                >
-                                                    <Plus className="w-4 h-4 inline" /> Apply
-                                                </button>
+                                        <div key={team.team_id} className="rounded-2xl border border-white/10 bg-gradient-to-br from-white/[0.04] to-white/[0.01] overflow-hidden">
+                                            {/* Team header with gradient accent */}
+                                            <div className="relative px-4 py-3 border-b border-white/5">
+                                                <div className="absolute inset-0 bg-gradient-to-r from-orange-500/5 via-transparent to-purple-500/5" />
+                                                <div className="relative flex items-center justify-between">
+                                                    <button onClick={() => { setExpandedTeam(expandedTeam === team.team_id ? null : team.team_id); if (expandedTeam !== team.team_id) fetchScoreLogs(team.team_id); }} className="text-left flex items-center gap-3">
+                                                        {team.image_url && team.image_approved ? (
+                                                            <img src={team.image_url} alt="" className="w-10 h-10 rounded-xl object-cover border-2 border-orange-500/20 shadow-lg shadow-orange-500/5" />
+                                                        ) : (
+                                                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500/20 to-orange-600/10 flex items-center justify-center text-orange-400 text-sm font-bold border border-orange-500/20">
+                                                                {team.name.charAt(0)}
+                                                            </div>
+                                                        )}
+                                                        <div>
+                                                            <p className="text-white font-bold">{team.name}</p>
+                                                            <p className="text-gray-500 text-[10px] font-mono">{team.team_id}</p>
+                                                        </div>
+                                                    </button>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-orange-500/15 to-yellow-500/10 border border-orange-500/20">
+                                                            <span className="text-orange-400 font-bold text-xl tabular-nums">{team.points}</span>
+                                                            <span className="text-orange-400/50 text-[10px] ml-1">pts</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
 
-                                            {/* Expanded score log */}
-                                            {expandedTeam === team.team_id && (
-                                                <div className="mt-3 border-t border-white/5 pt-3 max-h-48 overflow-y-auto">
-                                                    <p className="text-xs text-gray-400 mb-2 font-bold">Point History:</p>
-                                                    {scoreLogs.filter(l => l.team_id === team.team_id).length === 0 ? (
-                                                        <p className="text-xs text-gray-600">No entries yet.</p>
+                                            <div className="p-4 space-y-3">
+                                                {/* Team Actions */}
+                                                <div className="flex gap-2">
+                                                    {team.eliminated ? (
+                                                        <button onClick={() => eliminateTeam(team.team_id, false)} className="px-3 py-1.5 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-bold hover:bg-green-500/20">
+                                                            Reinstate Team
+                                                        </button>
                                                     ) : (
-                                                        scoreLogs.filter(l => l.team_id === team.team_id).map((log) => (
-                                                            <div key={log.id} className="flex items-center gap-2 text-xs py-1 border-b border-white/3">
-                                                                <span className={`font-mono font-bold ${log.delta > 0 ? "text-green-400" : "text-red-400"}`}>
-                                                                    {log.delta > 0 ? "+" : ""}{log.delta}
-                                                                </span>
-                                                                <span className="text-gray-400 flex-1 truncate">R{log.round}: {log.description}</span>
-                                                                <span className="text-gray-600">{new Date(log.created_at).toLocaleTimeString()}</span>
-                                                            </div>
-                                                        ))
+                                                        <button onClick={() => eliminateTeam(team.team_id, true)} className="px-3 py-1.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition-all ml-auto">
+                                                            Eliminate Team
+                                                        </button>
                                                     )}
                                                 </div>
-                                            )}
+
+                                                {/* Per-round time taken */}
+                                                {team.round_times && Object.keys(team.round_times).length > 0 && (
+                                                    <div className="flex gap-1.5 flex-wrap">
+                                                        {Object.entries(team.round_times).map(([rk, sec]) => (
+                                                            <span key={rk} className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-full border border-white/5">
+                                                                {rk.toUpperCase()}: {formatTime(sec as number)}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+
+                                                {/* Per-player listing */}
+                                                <div className="space-y-1 border-t border-white/5 pt-3">
+                                                    {team.members.map((member) => {
+                                                        const pInfo = getPlayerInfo(member.userId);
+                                                        const inputKey = `${team.team_id}_${member.userId}`;
+                                                        return (
+                                                            <div key={member.userId} className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs transition-all ${member.eliminated ? "bg-red-500/5 border border-red-500/15" : "bg-white/[0.02] border border-white/5 hover:bg-white/[0.04]"}`}>
+                                                                <button
+                                                                    onClick={() => setSelectedPlayerUserId(member.userId)}
+                                                                    className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold cursor-pointer hover:ring-2 hover:ring-orange-500/50 transition-all ${member.eliminated ? "bg-red-500/20 text-red-400" : "bg-gradient-to-br from-orange-500/15 to-orange-600/10 text-orange-400"}`}
+                                                                >
+                                                                    {member.eliminated ? <Skull className="w-3 h-3" /> : member.name.charAt(0).toUpperCase()}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => setSelectedPlayerUserId(member.userId)}
+                                                                    className={`min-w-0 flex-shrink truncate cursor-pointer hover:text-orange-400 transition-colors ${member.eliminated ? "text-red-300 line-through" : "text-white"}`}
+                                                                >
+                                                                    {member.name}
+                                                                </button>
+                                                                {pInfo && (
+                                                                    <span className="text-[10px] text-gray-500 bg-white/5 px-2 py-0.5 rounded-full ml-auto mr-1">{pInfo.points}pts</span>
+                                                                )}
+
+                                                                {/* Player point controls */}
+                                                                {!member.eliminated && (
+                                                                    <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+                                                                        {/* Quick player actions */}
+                                                                        <button
+                                                                            onClick={() => handlePlayerScoreChange(member.userId, team.team_id, 5, "Quick +5")}
+                                                                            className="px-2 py-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500/20 text-[10px] font-mono transition-all font-bold"
+                                                                        >
+                                                                            +5
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => handlePlayerScoreChange(member.userId, team.team_id, -5, "Quick -5")}
+                                                                            className="px-2 py-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 text-[10px] font-mono transition-all font-bold"
+                                                                        >
+                                                                            -5
+                                                                        </button>
+
+                                                                        <div className="h-4 w-px bg-white/10 mx-1" />
+
+                                                                        <div className="flex items-center gap-1 bg-black/30 rounded-lg border border-white/10 p-0.5">
+                                                                            <input
+                                                                                type="number"
+                                                                                placeholder="±"
+                                                                                value={playerScoreInputs[inputKey]?.delta || ""}
+                                                                                onChange={(e) => setPlayerScoreInputs({ ...playerScoreInputs, [inputKey]: { ...playerScoreInputs[inputKey], delta: e.target.value } })}
+                                                                                className="w-10 px-1 py-0.5 bg-transparent text-white text-[10px] text-center focus:outline-none"
+                                                                            />
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    const d = parseInt(playerScoreInputs[inputKey]?.delta || "0");
+                                                                                    if (d !== 0) {
+                                                                                        handlePlayerScoreChange(member.userId, team.team_id, d, playerScoreInputs[inputKey]?.desc || `Points for ${member.name}`);
+                                                                                        setPlayerScoreInputs({ ...playerScoreInputs, [inputKey]: { delta: "", desc: "" } });
+                                                                                    }
+                                                                                }}
+                                                                                className="p-1 rounded bg-orange-500/20 text-orange-400 hover:bg-orange-500/40 transition-all"
+                                                                            >
+                                                                                <Plus className="w-3 h-3" />
+                                                                            </button>
+                                                                        </div>
+
+                                                                        {member.eliminated ? (
+                                                                            <button onClick={() => reinstatePlayer(team.team_id, member.userId)} className="p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 transition-all">
+                                                                                <ShieldCheck className="w-3 h-3" />
+                                                                            </button>
+                                                                        ) : (
+                                                                            <button onClick={() => eliminatePlayer(team.team_id, member.userId)} className="p-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-all">
+                                                                                <Skull className="w-3 h-3" />
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                )}
+                                                                {member.eliminated && (
+                                                                    <button onClick={() => reinstatePlayer(team.team_id, member.userId)} className="ml-auto px-2 py-1 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400 text-[10px] hover:bg-green-500/20 transition-all">
+                                                                        Reinstate
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+
+                                                {/* Expanded score log */}
+                                                {expandedTeam === team.team_id && (
+                                                    <div className="mt-3 border-t border-white/5 pt-3 max-h-48 overflow-y-auto">
+                                                        <p className="text-xs text-gray-400 mb-2 font-bold">Point History:</p>
+                                                        {scoreLogs.filter(l => l.team_id === team.team_id).length === 0 ? (
+                                                            <p className="text-xs text-gray-600">No entries yet.</p>
+                                                        ) : (
+                                                            scoreLogs.filter(l => l.team_id === team.team_id).map((log) => (
+                                                                <div key={log.id} className="flex items-center gap-2 text-xs py-1 border-b border-white/3">
+                                                                    <span className={`font-mono font-bold ${log.delta > 0 ? "text-green-400" : "text-red-400"}`}>
+                                                                        {log.delta > 0 ? "+" : ""}{log.delta}
+                                                                    </span>
+                                                                    <span className="text-gray-400 flex-1 truncate">
+                                                                        R{log.round}: {log.description}
+                                                                        {log.player_user_id && (
+                                                                            <button
+                                                                                onClick={() => setSelectedPlayerUserId(log.player_user_id!)}
+                                                                                className="ml-1 text-orange-400 hover:underline"
+                                                                            >
+                                                                                👤
+                                                                            </button>
+                                                                        )}
+                                                                    </span>
+                                                                    <span className="text-gray-600">{new Date(log.created_at).toLocaleTimeString()}</span>
+                                                                </div>
+                                                            ))
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -495,62 +701,13 @@ export default function AdminPage() {
                             <Leaderboard teams={teams} />
                         </div>
 
-                        {/* Elimination Panel */}
-                        <div className="glass-card-elevated p-6 mb-8">
-                            <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-3" style={{ fontFamily: "var(--font-display)" }}>
-                                <Skull className="w-6 h-6 text-red-500" />
-                                Elimination Control
-                            </h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                {teams.map((team) => (
-                                    <div key={team.team_id} className="glass-card p-4">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <div className="flex items-center gap-2">
-                                                <h3 className="text-white font-bold text-sm">{team.name}</h3>
-                                                <span className="text-gray-500 text-xs">{team.team_id}</span>
-                                            </div>
-                                            <div className="flex items-center gap-1">
-                                                {team.members.map((m, idx) => (
-                                                    <div key={idx} className={`w-2.5 h-2.5 rounded-full ${m.eliminated ? "bg-red-500" : "bg-green-500"}`} title={m.name} />
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2 mb-3">
-                                            {team.image_approved ? (
-                                                <span className="text-xs text-green-400 flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Approved</span>
-                                            ) : (
-                                                <span className="text-xs text-yellow-400 flex items-center gap-1"><XCircle className="w-3 h-3" /> Pending</span>
-                                            )}
-                                            {team.image_url && <span className="text-xs text-blue-400 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Photo</span>}
-                                        </div>
-                                        <div className="space-y-2">
-                                            {team.members.map((member) => (
-                                                <div key={member.userId} className={`flex items-center gap-2 p-2 rounded-lg text-xs ${member.eliminated ? "bg-red-500/5 border border-red-500/20" : "bg-white/[0.02] border border-white/5"}`}>
-                                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${member.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400"}`}>
-                                                        {member.eliminated ? <Skull className="w-3 h-3" /> : member.name.charAt(0).toUpperCase()}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className={`truncate ${member.eliminated ? "text-red-300 line-through" : "text-white"}`}>{member.name}</p>
-                                                    </div>
-                                                    {member.eliminated ? (
-                                                        <button onClick={() => reinstatePlayer(team.team_id, member.userId)} className="px-2 py-1 rounded-md bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500/20 transition-colors flex items-center gap-1">
-                                                            <ShieldCheck className="w-3 h-3" /> Reinstate
-                                                        </button>
-                                                    ) : (
-                                                        <button onClick={() => eliminatePlayer(team.team_id, member.userId)} className="px-2 py-1 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors flex items-center gap-1">
-                                                            <Skull className="w-3 h-3" /> Eliminate
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ))}
+                        {/* Charts */}
+                        {teams.length > 0 && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                                <StandingsChart teams={teams} />
+                                <TimeChart teams={teams} />
                             </div>
-                        </div>
-
-                        {/* Chart */}
-                        {teams.length > 0 && <StandingsChart teams={teams} />}
+                        )}
                     </>
                 )}
 
@@ -569,10 +726,12 @@ export default function AdminPage() {
                                 <Shuffle className="w-4 h-4" />
                                 Shuffle Teams for Next Round
                             </button>
-                            <button onClick={nextRound} disabled={loading === "round"} className="btn-primary flex items-center gap-2 disabled:opacity-40">
-                                <ArrowRight className="w-4 h-4" />
-                                Advance to Round {(gameState?.current_round || 1) + 1}
-                            </button>
+                            {(gameState?.current_round || 1) < 4 && (
+                                <button onClick={nextRound} disabled={loading === "round"} className="btn-primary flex items-center gap-2 disabled:opacity-40">
+                                    <ArrowRight className="w-4 h-4" />
+                                    Advance to Round {(gameState?.current_round || 1) + 1}
+                                </button>
+                            )}
                             <button onClick={finishGame} disabled={loading === "finish"} className="btn-danger flex items-center gap-2 disabled:opacity-40">
                                 <Trophy className="w-4 h-4" />
                                 Finish Game
@@ -592,16 +751,32 @@ export default function AdminPage() {
                                 {teams.map((team) => (
                                     <div key={team.team_id} className="glass-card p-4">
                                         <div className="flex items-center gap-2 mb-3">
+                                            {team.image_url && team.image_approved ? (
+                                                <img src={team.image_url} alt="" className="w-8 h-8 rounded-full object-cover border border-orange-500/30" />
+                                            ) : null}
                                             <h4 className="text-white font-bold text-sm">{team.name}</h4>
                                             <span className="text-gray-500 text-xs">{team.team_id}</span>
                                             <span className="text-orange-400 text-xs ml-auto font-bold">{team.points} pts</span>
                                         </div>
+                                        {/* Round times */}
+                                        {team.round_times && Object.keys(team.round_times).length > 0 && (
+                                            <div className="flex gap-2 mb-2 flex-wrap">
+                                                {Object.entries(team.round_times).map(([rk, sec]) => (
+                                                    <span key={rk} className="text-[10px] text-gray-400 bg-white/5 px-2 py-0.5 rounded-full">
+                                                        {rk.toUpperCase()}: {formatTime(sec as number)}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
                                         <div className="space-y-2">
                                             {team.members.map((member) => (
                                                 <div key={member.userId} className={`flex items-center gap-2 p-2 rounded-lg text-xs ${member.eliminated ? "bg-red-500/5 border border-red-500/20" : "bg-white/[0.02] border border-white/5"}`}>
-                                                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${member.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400"}`}>
+                                                    <button
+                                                        onClick={() => setSelectedPlayerUserId(member.userId)}
+                                                        className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold cursor-pointer hover:ring-2 hover:ring-orange-500/50 ${member.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400"}`}
+                                                    >
                                                         {member.eliminated ? <Skull className="w-3 h-3" /> : member.name.charAt(0).toUpperCase()}
-                                                    </div>
+                                                    </button>
                                                     <span className={`flex-1 truncate ${member.eliminated ? "text-red-300 line-through" : "text-white"}`}>{member.name}</span>
                                                     {member.eliminated ? (
                                                         <button onClick={() => reinstatePlayer(team.team_id, member.userId)} className="px-2 py-1 rounded-md bg-green-500/10 border border-green-500/20 text-green-400 text-[10px]">Reinstate</button>
@@ -617,6 +792,12 @@ export default function AdminPage() {
                         </div>
 
                         {teams.length > 0 && <div className="mt-6"><Leaderboard teams={teams} /></div>}
+                        {teams.length > 0 && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                                <StandingsChart teams={teams} />
+                                <TimeChart teams={teams} />
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -639,10 +820,13 @@ export default function AdminPage() {
                             </div>
                         </div>
                         <Leaderboard teams={teams} />
-                        <StandingsChart teams={teams} />
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <StandingsChart teams={teams} />
+                            <TimeChart teams={teams} />
+                        </div>
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }

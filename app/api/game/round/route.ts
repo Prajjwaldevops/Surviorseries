@@ -42,6 +42,19 @@ export async function POST(req: NextRequest) {
                 })
                 .neq("id", "00000000-0000-0000-0000-000000000000");
 
+            // Auto-start team timers for ALL teams in this round
+            const { data: allTeams } = await supabase.from("teams").select("team_id");
+            if (allTeams && allTeams.length > 0) {
+                const timerRecords = allTeams.map((t) => ({
+                    team_id: t.team_id,
+                    round: gs.current_round,
+                    started_at: new Date().toISOString(),
+                    stopped_at: null,
+                    elapsed_seconds: 0,
+                }));
+                await supabase.from("team_timers").upsert(timerRecords, { onConflict: "team_id,round" });
+            }
+
             return NextResponse.json({ success: true, round: gs.current_round, action: "started" });
         }
 
@@ -68,6 +81,38 @@ export async function POST(req: NextRequest) {
                     .eq("id", timer.id);
             }
 
+            // Auto-record: Stop all running team timers for the current round
+            const { data: runningTimers } = await supabase
+                .from("team_timers")
+                .select("*")
+                .eq("round", gs.current_round)
+                .is("stopped_at", null)
+                .not("started_at", "is", null);
+
+            if (runningTimers && runningTimers.length > 0) {
+                for (const tt of runningTimers) {
+                    const elapsedSec = Math.floor((Date.now() - new Date(tt.started_at).getTime()) / 1000);
+                    // Stop timer
+                    await supabase
+                        .from("team_timers")
+                        .update({ stopped_at: new Date().toISOString(), elapsed_seconds: elapsedSec })
+                        .eq("team_id", tt.team_id)
+                        .eq("round", gs.current_round);
+
+                    // Update team round_times
+                    const { data: teamData } = await supabase
+                        .from("teams")
+                        .select("round_times")
+                        .eq("team_id", tt.team_id)
+                        .single();
+                    if (teamData) {
+                        const roundTimes: Record<string, number> = teamData.round_times || {};
+                        roundTimes[`r${gs.current_round}`] = elapsedSec;
+                        await supabase.from("teams").update({ round_times: roundTimes }).eq("team_id", tt.team_id);
+                    }
+                }
+            }
+
             return NextResponse.json({ success: true, round: gs.current_round, action: "ended" });
         }
 
@@ -78,13 +123,7 @@ export async function POST(req: NextRequest) {
                 return NextResponse.json({ error: `Maximum ${TOTAL_ROUNDS} rounds reached. Finish the game instead.` }, { status: 400 });
             }
 
-            // Do NOT clear image_url/image_data here — shuffle handles that per-team.
-            // Only reset image_approved so admin/shuffle can re-evaluate.
-            // Teams with unchanged composition will keep their images.
-            await supabase
-                .from("teams")
-                .update({ image_approved: false })
-                .neq("id", "00000000-0000-0000-0000-000000000000");
+
 
             // Move to team_formation for next round
             const { error } = await supabase

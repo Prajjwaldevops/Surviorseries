@@ -110,6 +110,29 @@ export default function GamePage() {
         );
     }
 
+    // Show waiting screen if game is not in an active state
+    if (gameState && !["playing", "round_complete", "finished"].includes(gameState.status)) {
+        return (
+            <div className="min-h-screen">
+                <Navbar />
+                <div className="pt-24 px-4 max-w-lg mx-auto pb-12">
+                    <div className="glass-card-elevated p-12 text-center">
+                        <div className="w-16 h-16 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center mx-auto mb-4">
+                            <Timer className="w-8 h-8 text-yellow-400 animate-pulse" />
+                        </div>
+                        <h2 className="text-xl font-bold text-white mb-2">Waiting for Game to Start</h2>
+                        <p className="text-gray-400 mb-4">
+                            The admin will start the game shortly. Stay on this page.
+                        </p>
+                        <p className="text-xs text-gray-500 animate-pulse">
+                            This page will auto-update when the game starts...
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     const currentRound = gameState?.current_round || 1;
 
     return (
@@ -123,10 +146,10 @@ export default function GamePage() {
                         {[1, 2, 3, 4].map((r) => (
                             <div key={r} className="flex items-center gap-2">
                                 <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all ${r === currentRound
-                                        ? "bg-orange-500 text-white scale-110 shadow-lg shadow-orange-500/30"
-                                        : r < currentRound
-                                            ? "bg-green-500/20 text-green-400 border border-green-500/30"
-                                            : "bg-white/5 text-gray-500 border border-white/10"
+                                    ? "bg-orange-500 text-white scale-110 shadow-lg shadow-orange-500/30"
+                                    : r < currentRound
+                                        ? "bg-green-500/20 text-green-400 border border-green-500/30"
+                                        : "bg-white/5 text-gray-500 border border-white/10"
                                     }`}>
                                     {r < currentRound ? "✓" : r}
                                 </div>
@@ -200,10 +223,10 @@ export default function GamePage() {
                         <div className="grid grid-cols-2 gap-2">
                             {myTeam.members.map((m) => (
                                 <div key={m.userId} className={`flex items-center gap-2 p-2 rounded-lg border ${m.eliminated
-                                        ? "bg-red-500/5 border-red-500/20"
-                                        : m.userId === currentUserId
-                                            ? "bg-orange-500/10 border-orange-500/20"
-                                            : "bg-white/[0.02] border-white/5"
+                                    ? "bg-red-500/5 border-red-500/20"
+                                    : m.userId === currentUserId
+                                        ? "bg-orange-500/10 border-orange-500/20"
+                                        : "bg-white/[0.02] border-white/5"
                                     }`}>
                                     <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${m.eliminated ? "bg-red-500/20 text-red-400" : "bg-orange-500/10 text-orange-400"
                                         }`}>
@@ -237,8 +260,8 @@ export default function GamePage() {
                                         key={t.team_id}
                                         onClick={() => { setViewingTeamLogs(t.team_id); fetchTeamLogs(t.team_id); }}
                                         className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${viewingTeamLogs === t.team_id
-                                                ? "bg-orange-500/20 border border-orange-500/30 text-orange-400"
-                                                : "bg-white/5 border border-white/10 text-gray-400 hover:text-white"
+                                            ? "bg-orange-500/20 border border-orange-500/30 text-orange-400"
+                                            : "bg-white/5 border border-white/10 text-gray-400 hover:text-white"
                                             }`}
                                     >
                                         {t.name} ({t.points})

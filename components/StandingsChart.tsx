@@ -60,6 +60,11 @@ export default function StandingsChart({ teams }: StandingsChartProps) {
             members: t.members,
             activeCount: t.members.filter((m) => !m.eliminated).length,
             eliminatedCount: t.members.filter((m) => m.eliminated).length,
+            r1: t.round_points?.r1 || 0,
+            r2: t.round_points?.r2 || 0,
+            r3: t.round_points?.r3 || 0,
+            r4: t.round_points?.r4 || 0,
+
         }));
 
     return (
@@ -123,8 +128,8 @@ export default function StandingsChart({ teams }: StandingsChartProps) {
                                             <div
                                                 key={mIdx}
                                                 className={`w-3.5 h-3.5 rounded-full transition-all ${member.eliminated
-                                                        ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse"
-                                                        : "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.4)]"
+                                                    ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse"
+                                                    : "bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.4)]"
                                                     }`}
                                                 title={`${member.name} — ${member.eliminated ? "Eliminated" : "Active"}`}
                                             />

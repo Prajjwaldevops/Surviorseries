@@ -1,6 +1,6 @@
 -- ============================================
 -- Survivor Series — Supabase Database Schema
--- v3: + Multi-Round, Score Log, Timer, Game History, AdminX
+-- v4: + Players Registration, Player Scoring, Team Timers
 -- ============================================
 
 -- 1. Game State (singleton row)
@@ -37,8 +37,14 @@ CREATE TABLE IF NOT EXISTS teams (
   image_data JSONB DEFAULT NULL,
   -- round_image_urls stores image URLs for each round: {"r1":"url","r2":"url",...}
   round_image_urls JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- round_times stores per-round elapsed seconds: {"r1":120,"r2":95,...}
+  round_times JSONB NOT NULL DEFAULT '{}'::jsonb,
+  eliminated BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Migration for existing teams table:
+-- ALTER TABLE teams ADD COLUMN IF NOT EXISTS eliminated BOOLEAN NOT NULL DEFAULT false;
 
 -- 3. Lobby (online presence tracking)
 CREATE TABLE IF NOT EXISTS lobby (
@@ -59,6 +65,7 @@ CREATE TABLE IF NOT EXISTS score_log (
   new_total INTEGER NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT '',
   admin_note TEXT DEFAULT NULL,
+  player_user_id TEXT DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -81,21 +88,63 @@ CREATE TABLE IF NOT EXISTS game_history (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 7. Enable Realtime on all tables
+-- 7. Players (pre-lobby registration)
+CREATE TABLE IF NOT EXISTS players (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  roll_no TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  gender TEXT NOT NULL CHECK (gender IN ('male', 'female')),
+  points INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 8. Player Score Log (per-player point tracking)
+CREATE TABLE IF NOT EXISTS player_score_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL,
+  team_id TEXT NOT NULL,
+  round INTEGER NOT NULL,
+  delta INTEGER NOT NULL,
+  new_total INTEGER NOT NULL DEFAULT 0,
+  description TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 9. Team Timers (per-team per-round time snapshots)
+CREATE TABLE IF NOT EXISTS team_timers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id TEXT NOT NULL,
+  round INTEGER NOT NULL,
+  started_at TIMESTAMPTZ DEFAULT NULL,
+  stopped_at TIMESTAMPTZ DEFAULT NULL,
+  elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(team_id, round)
+);
+
+-- 10. Enable Realtime on all tables
 ALTER PUBLICATION supabase_realtime ADD TABLE game_state;
 ALTER PUBLICATION supabase_realtime ADD TABLE teams;
 ALTER PUBLICATION supabase_realtime ADD TABLE lobby;
 ALTER PUBLICATION supabase_realtime ADD TABLE score_log;
 ALTER PUBLICATION supabase_realtime ADD TABLE game_timer;
 ALTER PUBLICATION supabase_realtime ADD TABLE game_history;
+ALTER PUBLICATION supabase_realtime ADD TABLE players;
+ALTER PUBLICATION supabase_realtime ADD TABLE player_score_log;
+ALTER PUBLICATION supabase_realtime ADD TABLE team_timers;
 
--- 8. Row Level Security (permissive for MVP)
+-- 11. Row Level Security (permissive for MVP)
 ALTER TABLE game_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lobby ENABLE ROW LEVEL SECURITY;
 ALTER TABLE score_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_timer ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE players ENABLE ROW LEVEL SECURITY;
+ALTER TABLE player_score_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE team_timers ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all on game_state" ON game_state FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on teams" ON teams FOR ALL USING (true) WITH CHECK (true);
@@ -103,29 +152,62 @@ CREATE POLICY "Allow all on lobby" ON lobby FOR ALL USING (true) WITH CHECK (tru
 CREATE POLICY "Allow all on score_log" ON score_log FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on game_timer" ON game_timer FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on game_history" ON game_history FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all on players" ON players FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all on player_score_log" ON player_score_log FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all on team_timers" ON team_timers FOR ALL USING (true) WITH CHECK (true);
 
 -- ============================================
--- MIGRATION SQL (run this if upgrading from v2)
+-- MIGRATION SQL (run this if upgrading from v3)
 -- ============================================
--- -- game_state changes
--- ALTER TABLE game_state DROP CONSTRAINT IF EXISTS game_state_status_check;
--- ALTER TABLE game_state ADD CONSTRAINT game_state_status_check CHECK (status IN ('waiting', 'team_formation', 'image_upload', 'playing', 'round_complete', 'finished'));
--- ALTER TABLE game_state ADD COLUMN IF NOT EXISTS current_round INTEGER NOT NULL DEFAULT 0;
--- ALTER TABLE game_state ADD COLUMN IF NOT EXISTS round_status TEXT NOT NULL DEFAULT 'idle';
--- ALTER TABLE game_state ADD COLUMN IF NOT EXISTS teams_locked BOOLEAN NOT NULL DEFAULT false;
--- ALTER TABLE game_state ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ DEFAULT NULL;
+-- -- teams: add round_times column
+-- ALTER TABLE teams ADD COLUMN IF NOT EXISTS round_times JSONB NOT NULL DEFAULT '{}'::jsonb;
 --
--- -- teams changes
--- ALTER TABLE teams ADD COLUMN IF NOT EXISTS round_points JSONB NOT NULL DEFAULT '{"r1":0,"r2":0,"r3":0,"r4":0}'::jsonb;
--- ALTER TABLE teams ADD COLUMN IF NOT EXISTS image_approved BOOLEAN NOT NULL DEFAULT false;
--- ALTER TABLE teams ADD COLUMN IF NOT EXISTS round_image_urls JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- -- score_log: add player reference
+-- ALTER TABLE score_log ADD COLUMN IF NOT EXISTS player_user_id TEXT DEFAULT NULL;
 --
 -- -- new tables
--- CREATE TABLE IF NOT EXISTS score_log ( ... );  -- see above
--- CREATE TABLE IF NOT EXISTS game_timer ( ... );  -- see above
--- CREATE TABLE IF NOT EXISTS game_history ( ... ); -- see above
+-- CREATE TABLE IF NOT EXISTS players (
+--   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--   user_id TEXT UNIQUE NOT NULL,
+--   name TEXT NOT NULL,
+--   roll_no TEXT NOT NULL,
+--   branch TEXT NOT NULL,
+--   gender TEXT NOT NULL CHECK (gender IN ('male', 'female')),
+--   points INTEGER NOT NULL DEFAULT 0,
+--   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- );
+--
+-- CREATE TABLE IF NOT EXISTS player_score_log (
+--   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--   user_id TEXT NOT NULL,
+--   team_id TEXT NOT NULL,
+--   round INTEGER NOT NULL,
+--   delta INTEGER NOT NULL,
+--   new_total INTEGER NOT NULL DEFAULT 0,
+--   description TEXT NOT NULL DEFAULT '',
+--   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- );
+--
+-- CREATE TABLE IF NOT EXISTS team_timers (
+--   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--   team_id TEXT NOT NULL,
+--   round INTEGER NOT NULL,
+--   started_at TIMESTAMPTZ DEFAULT NULL,
+--   stopped_at TIMESTAMPTZ DEFAULT NULL,
+--   elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+--   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+--   UNIQUE(team_id, round)
+-- );
 --
 -- -- realtime for new tables
--- ALTER PUBLICATION supabase_realtime ADD TABLE score_log;
--- ALTER PUBLICATION supabase_realtime ADD TABLE game_timer;
--- ALTER PUBLICATION supabase_realtime ADD TABLE game_history;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE players;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE player_score_log;
+-- ALTER PUBLICATION supabase_realtime ADD TABLE team_timers;
+--
+-- -- RLS for new tables
+-- ALTER TABLE players ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE player_score_log ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE team_timers ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "Allow all on players" ON players FOR ALL USING (true) WITH CHECK (true);
+-- CREATE POLICY "Allow all on player_score_log" ON player_score_log FOR ALL USING (true) WITH CHECK (true);
+-- CREATE POLICY "Allow all on team_timers" ON team_timers FOR ALL USING (true) WITH CHECK (true);

@@ -54,19 +54,27 @@ export default function Leaderboard({ teams, previousRanks = {} }: LeaderboardPr
                                     delay: index * 0.05,
                                 }}
                                 className={`flex items-center justify-between p-4 rounded-xl transition-all ${team.rank === 1
-                                        ? "bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/20"
-                                        : team.rank === 2
-                                            ? "bg-white/[0.03] border border-white/5"
-                                            : team.rank === 3
-                                                ? "bg-white/[0.02] border border-white/5"
-                                                : "bg-white/[0.01] border border-white/5"
+                                    ? "bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/20"
+                                    : team.rank === 2
+                                        ? "bg-white/[0.03] border border-white/5"
+                                        : team.rank === 3
+                                            ? "bg-white/[0.02] border border-white/5"
+                                            : "bg-white/[0.01] border border-white/5"
                                     }`}
                             >
                                 <div className="flex items-center gap-4">
-                                    {/* Rank badge */}
-                                    <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center">
-                                        {getRankIcon(team.rank)}
-                                    </div>
+                                    {/* Team avatar or rank badge */}
+                                    {team.image_url && team.image_approved ? (
+                                        <img
+                                            src={team.image_url}
+                                            alt={team.name}
+                                            className="w-10 h-10 rounded-full object-cover border-2 border-orange-500/30"
+                                        />
+                                    ) : (
+                                        <div className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center">
+                                            {getRankIcon(team.rank)}
+                                        </div>
+                                    )}
 
                                     {/* Team info */}
                                     <div>
