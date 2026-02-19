@@ -210,4 +210,9 @@ CREATE POLICY "Allow all on team_timers" ON team_timers FOR ALL USING (true) WIT
 -- ALTER TABLE team_timers ENABLE ROW LEVEL SECURITY;
 -- CREATE POLICY "Allow all on players" ON players FOR ALL USING (true) WITH CHECK (true);
 -- CREATE POLICY "Allow all on player_score_log" ON player_score_log FOR ALL USING (true) WITH CHECK (true);
--- CREATE POLICY "Allow all on team_timers" ON team_timers FOR ALL USING (true) WITH CHECK (true);
+-- 12. Performance Indexes (Phase 10 Optimization)
+CREATE INDEX IF NOT EXISTS teams_points_idx ON teams (points DESC);
+CREATE INDEX IF NOT EXISTS teams_rank_idx ON teams (rank ASC);
+CREATE INDEX IF NOT EXISTS score_log_team_idx ON score_log (team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS player_score_log_user_idx ON player_score_log (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS team_timers_round_idx ON team_timers (team_id, round);

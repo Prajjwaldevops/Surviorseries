@@ -57,8 +57,12 @@ export default function AdminPage() {
 
     // Fetch functions
     const fetchTeams = useCallback(async () => {
-        const { data } = await supabase.from("teams").select("*").order("rank", { ascending: true });
-        if (data) setTeams(data);
+        // Optimization: Select only necessary columns
+        const { data } = await supabase
+            .from("teams")
+            .select("team_id, name, rank, points, round_points, round_times, members, image_url, eliminated, approved, image_approved")
+            .order("rank", { ascending: true });
+        if (data) setTeams(data as Team[]);
     }, []);
 
     const fetchLobby = useCallback(async () => {

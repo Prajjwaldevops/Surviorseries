@@ -20,8 +20,12 @@ export default function StandingsPage() {
     const [selectedPlayerUserId, setSelectedPlayerUserId] = useState<string | null>(null);
 
     const fetchData = useCallback(async () => {
-        const { data: t } = await supabase.from("teams").select("*").order("rank", { ascending: true });
-        if (t) setTeams(t);
+        // Optimization: Select only necessary columns (exclude potentially large image_data)
+        const { data: t } = await supabase
+            .from("teams")
+            .select("team_id, name, rank, points, round_points, round_times, members, image_url, eliminated, approved, image_approved")
+            .order("rank", { ascending: true });
+        if (t) setTeams(t as Team[]);
 
         const { data: p } = await supabase.from("players").select("*");
         if (p) setPlayers(p);
